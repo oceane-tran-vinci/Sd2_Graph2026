@@ -1,28 +1,40 @@
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.Deque;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.PriorityQueue;
-import java.util.Queue;
-import java.util.Set;
-import java.util.TreeMap;
 
+/**
+ * ============================
+ * GRAPH (Graphe orienté pondéré)
+ * ============================
+ *
+ * Ce projet modélise un graphe :
+ * - Les sommets = Localisation (nodes)
+ * - Les arcs = Arc (edges)
+ *
+ * Structure principale :
+ * - localisationsMap : accès rapide par ID
+ * - listeAdjacence : représentation du graphe (liste d'adjacence)
+ *
+ * Tous les algorithmes (BFS / Dijkstra) reposent dessus.
+ */
 public class Graph {
 
   private final String localisationsFile;
   private final String roadsFile;
-  private final Map<Long, Localisation> localisationsMap = new HashMap<>();
-  private final Map<Localisation, ArrayList<Arc>> listeAdjacence = new HashMap<>();
+  private final Map<Long, Localisation> localisationsMap = new HashMap<>(); // Map ID -> Node (accès O(1))
+  private final Map<Localisation, ArrayList<Arc>> listeAdjacence = new HashMap<>(); // Liste d’adjacence : Node -> arcs sortants
 
+  /**
+   * CONSTRUCTEUR
+   * Initialise le graphe en chargeant les fichiers CSV.
+   *
+   * Étapes :
+   * 1. Charger les sommets (Localisation)
+   * 2. Charger les arcs (routes)
+   * 3. Construire la liste d’adjacence
+   */
   public Graph(String localisations, String roads) {
     this.localisationsFile = localisations;
     this.roadsFile = roads;
@@ -32,33 +44,51 @@ public class Graph {
     loadArcs();
   }
 
+
+  /**
+   * =========================================
+   * BFS FLOOD FILL (propagation d'inondation)
+   * =========================================
+   *
+   * Algorithme : BFS (parcours en largeur)
+   *
+   * Idée :
+   * - On part des sources d'inondation
+   * - On propage vers les voisins si condition altitude OK
+   *
+   * Structures utilisées :
+   * - Queue → exploration BFS
+   * - Set → éviter revisite (cycle)
+   * - List → garder ordre de propagation
+   */
   public Localisation[] determinerZoneInondee(long[] idsOrigin, double epsilon) {
     // Check des ids de départ
     if (idsOrigin == null || idsOrigin.length == 0) {
       return new Localisation[0];
     }
 
-    Queue<Localisation> queue = new ArrayDeque<>(); // Queue pour visiter les voisins
+    Queue<Localisation> queue = new ArrayDeque<>(); // BFS Queue pour visiter les voisins
     Set<Localisation> flooded = new HashSet<>(); // Set pour garder les localisations visitées
-    List<Localisation> visitedOrder = new ArrayList<>(); // List pour garder l'ordre de parcours
+    List<Localisation> visitedOrder = new ArrayList<>(); // List pour garder l'ordre de parcours (BFS) (utile pour debug / résultat)
 
+    // Initialisation des sources d’inondation
     for (long id : idsOrigin) {
       Localisation source = localisationsMap.get(id);
-      if (source != null && flooded.add(
-          source)) { // Si c'est une source -> elle est toujours inondée donc on l'ajoute
+      // Ajout uniquement si valide + pas déjà ajouté
+      if (source != null && flooded.add(source)) { // Si c'est une source -> elle est toujours inondée donc on l'ajoute
         queue.add(source);
         visitedOrder.add(source);
       }
     }
 
-    // On cherche les voisins inondés
+    // On cherche les voisins inondés, BFS classique
     while (!queue.isEmpty()) {
-      Localisation currentLoc = queue.poll();
-      List<Arc> arcsSortants = getArcsSortants(currentLoc);
+      Localisation currentLoc = queue.poll(); // FIFO BFS
+      List<Arc> arcsSortants = getArcsSortants(currentLoc); // Tous les arcs sortants = voisins directs
 
       for (Arc arc : arcsSortants) {
         Localisation voisin = arc.getTarget();
-
+        // Condition physique : l'eau monte seulement si altitude accessible
         if (voisin.getAltitude() <= currentLoc.getAltitude() + epsilon && flooded.add(voisin)) {
           queue.add(voisin);
           visitedOrder.add(voisin);
@@ -69,6 +99,21 @@ public class Graph {
     return visitedOrder.toArray(new Localisation[0]);
   }
 
+  /**
+   * ==========================================
+   * BFS SHORTEST PATH (avec obstacles inondés)
+   * ==========================================
+   *
+   * Algorithme : BFS classique + filtrage de nœuds
+   *
+   * Ajout important :
+   * - Map parent → reconstruction du chemin
+   *
+   * Structures :
+   * - Queue → exploration BFS
+   * - Set visited → éviter cycles
+   * - Map parent → remonter chemin final
+   */
   public Deque<Localisation> trouverCheminLePlusCourtPourContournerLaZoneInondee(long idOrigin,
       long idDestination, Localisation[] floodedZone) {
 
@@ -87,7 +132,7 @@ public class Graph {
     }
 
 
-    // Convertir floodedZone en Set pour faire une recherche rapide
+    // Convertir floodedZone en Set pour accès rapide O(1) aux zones interdites
     Set<Localisation> floodedZoneSet = new HashSet<>(Arrays.asList(floodedZone));
 
     // Vérifier si origine ou destination sont inondés
@@ -98,7 +143,7 @@ public class Graph {
       throw new RuntimeException("Le point de destination " + idDestination + " est inondé !");
     }
 
-    // Si tout est OK code BFS
+    // BFS structures
     Queue<Localisation> queue = new ArrayDeque<>(); // Queue pour BFS
     Set<Localisation> visited = new HashSet<>(); // Set pour les nœuds visités
     Map<Localisation, Localisation> parent = new HashMap<>(); // Pour reconstruire le chemin
@@ -117,7 +162,7 @@ public class Graph {
       for (Arc arc : arcsSortants) {
         Localisation voisins = arc.getTarget(); // Définir le voisin
 
-        // Vérifier si déjà visité ou inondé
+        // Skip si déjà visité OU zone inondée
         if (visited.contains(voisins) || floodedZoneSet.contains(voisins)) {
           continue;
         }
@@ -127,7 +172,7 @@ public class Graph {
         visited.add(voisins);
         parent.put(voisins, current);
 
-        // Si on a trouvé la destination : stop programme
+        // arrêt immédiat si destination atteinte
         if (voisins.equals(destination)) {
           found = true;
           break;
@@ -146,6 +191,22 @@ public class Graph {
     return path;
   }
 
+
+  /**
+   * ==========================================
+   * DIJKSTRA (propagation crue avec coûts dynamiques)
+   * ==========================================
+   *
+   * Algorithme : Dijkstra modifié
+   *
+   * Particularité :
+   * - coût dépend du temps + vitesse variable
+   *
+   * Structures :
+   * - PriorityQueue → toujours le plus petit temps
+   * - Map tFlood → distance (temps inondation)
+   * - Map vWater → état dynamique du système
+   */
   public Map<Localisation, Double> determinerChronologieDeLaCrue(long[] idsOrigin,
       double vWaterInit, double k) {
     if (idsOrigin == null || idsOrigin.length == 0) {
@@ -159,12 +220,14 @@ public class Graph {
     Map<Localisation, Double> tFlood = new HashMap<>(); // Temps inondation de chaque lieu
     Map<Localisation, Double> vWater = new HashMap<>(); // Vitesse de l'eau de chaque lieu
 
+    // initialisation : tous infiniment loin
     localisationsMap.values().forEach((l) -> tFlood.put(l, Double.MAX_VALUE));
 
+    // PriorityQueue = Dijkstra
     PriorityQueue<Localisation> priorityQueue = new PriorityQueue<>(
         Comparator.comparingDouble(tFlood::get));
 
-    // ajout sources
+    // initialisation sources
     for (long id : idsOrigin) {
       Localisation source = localisationsMap.get(id);
       if (source != null) {
@@ -187,6 +250,7 @@ public class Graph {
 
         double pente = arcsSortant.getPente();
 
+        // vitesse mise à jour selon pente
         double vWaterVoisin = currentVitesse + (k * pente);
         if (vWaterVoisin <= 0) {
           continue;
@@ -195,6 +259,7 @@ public class Graph {
         double tArc = arcsSortant.getDist() / vWaterVoisin;
         double newT = currentTime + tArc;
 
+        // relaxation Dijkstra
         if (newT < tFlood.get(voisin)) {
           tFlood.put(voisin, newT);
           vWater.put(voisin, vWaterVoisin);
@@ -216,6 +281,15 @@ public class Graph {
     return result;
   }
 
+  /**
+   * ==========================================
+   * DIJKSTRA + CONTRAINTE (évacuation)
+   * ==========================================
+   *
+   * Variante :
+   * - Dijkstra classique
+   * - + contrainte : ne pas arriver après inondation
+   */
   public Deque<Localisation> trouverCheminDEvacuationLePlusCourt(long idOrigin, long idEvacuation,
       double vVehicule, Map<Localisation, Double> tFlood) {
 
@@ -299,7 +373,11 @@ public class Graph {
   }
 
 
-
+  /**
+   * ======================
+   * CHARGEMENT CSV (nodes)
+   * ======================
+   */
   private void loadLocalisations() {
     try (BufferedReader br = new BufferedReader(new FileReader(this.localisationsFile))) {
       String line;
@@ -329,6 +407,8 @@ public class Graph {
     }
   }
 
+
+  //CHARGEMENT CSV (edges)
   private void loadArcs() {
     try (BufferedReader br = new BufferedReader(new FileReader(this.roadsFile))) {
       String line;
@@ -370,11 +450,12 @@ public class Graph {
     }
   }
 
-  // Trouver tous les arcs (roads, chemins) d'une loc, si aucun chemin n'est trouvé, on initialise une liste
+  // Retourne les arcs sortants (voisins directs)
   private List<Arc> getArcsSortants(Localisation l) {
     return listeAdjacence.getOrDefault(l, new ArrayList<>());
   }
 
+  // Reconstruction de chemin via map parent
   private Deque<Localisation> reconstructPath(Localisation destination, Map<Localisation, Localisation> parent) {
     Deque<Localisation> path = new ArrayDeque<>();
     Localisation current = destination;
